@@ -8,10 +8,13 @@ from os import getenv
 from boto3.dynamodb.conditions import Key
 from boto3.dynamodb.conditions import Attr
 
-def lambda_handler(event, context):
+def crude_stocks_handler(event, context):
     
+    # Connect to DynamoDB for logging successful posts
     ddb = boto3.resource('dynamodb')
-    table = ddb.Table('eiabot-log')
+    table = ddb.Table(getenv('EIABOT_TABLE'))
+
+    # Request and clean data from the EIA
     # Series ID reference
     # Weekly crude oil stocks incl SPR: PET.WCRSTUS1.W
     # Weekly crude oil stocks excl SPR: PET.WCESTUS1.W
@@ -35,9 +38,10 @@ def lambda_handler(event, context):
     spr_stocks = [i[1] for i in data[2]['data']]
     series_end = int(data[0]['end'])
 
+    # Check DDB table if a post was already made for this data
     ddb_response = table.query(
         KeyConditionExpression=Key('dataset').eq('crude_stocks'),
-        FilterExpression=Attr('series_end').eq(series_end) & Attr('post_success').eq(True)
+        FilterExpression=Attr('series_end').eq(series_end)
     )
 
     if len(ddb_response['Items']) == 0:
@@ -46,7 +50,8 @@ def lambda_handler(event, context):
         message = f'<b>Crude oil stocks for week ending {end_date.strftime("%B %d, %Y")} (weekly change)</b>\n\n'
         message += f'Commercial:    {com_stocks[0]/1000}M     ({(com_stocks[0]-com_stocks[1])/1000}M)\n'
         message += f'SPR:                   {spr_stocks[0]/1000}M    ({(spr_stocks[0]-spr_stocks[1])/1000}M)\n'
-        message += f'Total:                 {total_stocks[0]/1000}M    ({(total_stocks[0]-total_stocks[1])/1000}M)\n'
+        message += f'Total:                 {total_stocks[0]/1000}M    ({(total_stocks[0]-total_stocks[1])/1000}M)\n\n'
+        message += 'Source: US Energy Information Administration'
         
         tg_response = tg.post_message(message)
         if tg_response['ok'] == True:
@@ -54,9 +59,7 @@ def lambda_handler(event, context):
                 Item={
                     'dataset' : 'crude_stocks',
                     'timestamp' : int(time()),
-                    'query_success' : True,
-                    'series_end' : series_end,
-                    'post_success' : True
+                    'series_end' : series_end
                 })
             return {'statusCode': 200, 'body': json.dumps({'post_made' : True, 'tg_response' : tg_response})}
 

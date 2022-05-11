@@ -2,8 +2,8 @@ import json
 import requests
 from os import getenv
 
-base_url = f'https://api.telegram.org/bot{getenv("TGBOTKEY")}/'
-channel_id = -647042555
+base_url = f'https://api.telegram.org/bot{getenv("EIABOT_TGKEY")}/'
+channel_id = getenv('EIABOT_TGCHAT')
 
 def post_message(message: str):
     data = {
