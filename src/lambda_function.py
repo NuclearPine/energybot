@@ -8,7 +8,7 @@ from os import getenv
 from boto3.dynamodb.conditions import Key
 from boto3.dynamodb.conditions import Attr
 
-def crude_stocks_handler(event, context):
+def stocks_handler(event, context):
     
     # Connect to DynamoDB for logging successful posts
     ddb = boto3.resource('dynamodb')
@@ -19,14 +19,14 @@ def crude_stocks_handler(event, context):
     # Weekly crude oil stocks incl SPR: PET.WCRSTUS1.W
     # Weekly crude oil stocks excl SPR: PET.WCESTUS1.W
     # Weekly SPR stocks: PET.WCSSTUS1.W
-    # Weekly finished gasonline stocks:
-    # Weekly finished distillate stocks 
+    # Weekly total gasoline stocks: PET.WGTSTUS1.W
+    # Weekly total distillate stocks PET.WDISTUS1.W
     
     eiakey = getenv("EIAKEY")
     params = {
         'api_key' : eiakey,
         'out' : 'json',
-        'series_id' : 'PET.WCRSTUS1.W;PET.WCESTUS1.W;PET.WCSSTUS1.W',
+        'series_id' : 'PET.WCRSTUS1.W;PET.WCESTUS1.W;PET.WCSSTUS1.W;PET.WGTSTUS1.W;PET.WDISTUS1.W',
         'num' : '52'
     }
     
@@ -36,8 +36,11 @@ def crude_stocks_handler(event, context):
     total_stocks = [i[1] for i in data[0]['data']]
     com_stocks = [i[1] for i in data[1]['data']]
     spr_stocks = [i[1] for i in data[2]['data']]
+    gas_stocks = [i[1] for i in data[3]['data']]
+    dist_stocks = [i[1] for i in data[4]['data']]
     series_end = int(data[0]['end'])
-
+    print(data)
+    
     # Check DDB table if a post was already made for this data
     ddb_response = table.query(
         KeyConditionExpression=Key('dataset').eq('crude_stocks'),
@@ -47,10 +50,13 @@ def crude_stocks_handler(event, context):
     if len(ddb_response['Items']) == 0:
 
         end_date = datetime.strptime(data[0]['end'], '%Y%m%d')
-        message = f'<b>Crude oil stocks for week ending {end_date.strftime("%B %d, %Y")} (weekly change)</b>\n\n'
+        message = f'<b>Petroleum product stocks for week ending {end_date.strftime("%B %d, %Y")} (weekly change)</b>\n\n'
+        message += 'Crude oil\n'
         message += f'Commercial:    {com_stocks[0]/1000}M     ({(com_stocks[0]-com_stocks[1])/1000}M)\n'
         message += f'SPR:                   {spr_stocks[0]/1000}M    ({(spr_stocks[0]-spr_stocks[1])/1000}M)\n'
         message += f'Total:                 {total_stocks[0]/1000}M    ({(total_stocks[0]-total_stocks[1])/1000}M)\n\n'
+        message += f'Gasoline:           {gas_stocks[0]/1000}M   ({(gas_stocks[0]-gas_stocks[1])/1000}M)\n'
+        message += f'Distillates:         {dist_stocks[0]/1000}M   ({(dist_stocks[0]-dist_stocks[1])/1000}M)\n\n'
         message += 'Source: US Energy Information Administration'
         
         tg_response = tg.post_message(message)
