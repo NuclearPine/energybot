@@ -22,11 +22,12 @@ from os import getenv
 from boto3.dynamodb.conditions import Key
 from boto3.dynamodb.conditions import Attr
 
+eiakey = getenv("EIAKEY")
+# Connect to DynamoDB for logging successful posts
+ddb = boto3.resource('dynamodb')
+table = ddb.Table(getenv('EIABOT_TABLE'))
+
 def stocks_handler(event, context):
-    
-    # Connect to DynamoDB for logging successful posts
-    ddb = boto3.resource('dynamodb')
-    table = ddb.Table(getenv('EIABOT_TABLE'))
 
     # Request and clean data from the EIA
     # Series ID reference
@@ -36,24 +37,42 @@ def stocks_handler(event, context):
     # Weekly total gasoline stocks: PET.WGTSTUS1.W
     # Weekly total distillate stocks PET.WDISTUS1.W
     
-    eiakey = getenv("EIAKEY")
-    params = {
-        'api_key' : eiakey,
-        'out' : 'json',
-        'series_id' : 'PET.WCRSTUS1.W;PET.WCESTUS1.W;PET.WCSSTUS1.W;PET.WGTSTUS1.W;PET.WDISTUS1.W',
-        'num' : '52'
-    }
+    header = {
+    "frequency": "weekly",
+    "data": [
+        "value"
+    ],
+    "facets": {
+        "series": [
+            "WCESTUS1",
+            "WCRSTUS1",
+            "WCSSTUS1",
+            "WGTSTUS1",
+            "WDISTUS1"
+        ]
+    },
+    "start": None,
+    "end": None,
+    "sort": [
+        {
+            "column": "period",
+            "direction": "desc"
+        }
+    ],
+    "offset": 0,
+    "length": 10}
+
+    url = f'https://api.eia.gov/v2/petroleum/stoc/wstk/data/?api_key={eiakey}'
+    r = requests.get(url=url, headers={'X-Params' : json.dumps(header)})
+    data = json.loads(r.content)['response']['data']
     
-    r = requests.get(url=f'https://api.eia.gov/series/', params=params)
-    data = json.loads(r.content)['series']
-    
-    total_stocks = [i[1] for i in data[0]['data']]
-    com_stocks = [i[1] for i in data[1]['data']]
-    spr_stocks = [i[1] for i in data[2]['data']]
-    gas_stocks = [i[1] for i in data[3]['data']]
-    dist_stocks = [i[1] for i in data[4]['data']]
-    series_end = int(data[0]['end'])
     print(data)
+    series_end = data[0]['period']
+    total_stocks = [i['value'] for i in data if i['series'] == 'WCRSTUS1']
+    com_stocks = [i['value'] for i in data if i['series'] == 'WCESTUS1']
+    spr_stocks = [i['value'] for i in data if i['series'] == 'WCSSTUS1']
+    gas_stocks = [i['value'] for i in data if i['series'] == 'WGTSTUS1']
+    dist_stocks = [i['value'] for i in data if i['series'] == 'WDISTUS1']
     
     # Check DDB table if a post was already made for this data
     ddb_response = table.query(
@@ -63,15 +82,19 @@ def stocks_handler(event, context):
 
     if len(ddb_response['Items']) == 0:
 
-        end_date = datetime.strptime(data[0]['end'], '%Y%m%d')
-        message = f'<b>Petroleum product stocks for week ending {end_date.strftime("%B %d, %Y")} (weekly change)</b>\n\n'
+        def addcommas(value):
+            return "{:,}".format(value)
+
+        end_date = datetime.strptime(series_end, '%Y-%m-%d')
+        message = f'<b>Petroleum product stocks for week ending {end_date.strftime("%B %d, %Y")} (weekly change)</b>\n'
+        message += '<b>All units in thousands of BBL</b>\n\n'
         message += 'Crude oil\n'
-        message += f'Commercial:    {com_stocks[0]/1000}M     ({(com_stocks[0]-com_stocks[1])/1000}M)\n'
-        message += f'SPR:                   {spr_stocks[0]/1000}M    ({(spr_stocks[0]-spr_stocks[1])/1000}M)\n'
-        message += f'Total:                 {total_stocks[0]/1000}M    ({(total_stocks[0]-total_stocks[1])/1000}M)\n\n'
-        message += f'Gasoline:           {gas_stocks[0]/1000}M   ({(gas_stocks[0]-gas_stocks[1])/1000}M)\n'
-        message += f'Distillates:         {dist_stocks[0]/1000}M   ({(dist_stocks[0]-dist_stocks[1])/1000}M)\n\n'
-        message += 'Source: US Energy Information Administration'
+        message += f'Commercial:    {addcommas(com_stocks[0])}     ({addcommas(com_stocks[0]-com_stocks[1])})\n'
+        message += f'SPR:                   {addcommas(spr_stocks[0])}    ({addcommas(spr_stocks[0]-spr_stocks[1])})\n'
+        message += f'Total:                 {addcommas(total_stocks[0])}    ({addcommas(total_stocks[0]-total_stocks[1])})\n\n'
+        message += f'Gasoline:           {addcommas(gas_stocks[0])}   ({addcommas(gas_stocks[0]-gas_stocks[1])})\n'
+        message += f'Distillates:         {addcommas(dist_stocks[0])}   ({addcommas(dist_stocks[0]-dist_stocks[1])})\n\n'
+        message += 'Source: US Energy Information Administration\n#petroleum #stocks'
         
         tg_response = tg.post_message(message)
         if tg_response['ok'] == True:
@@ -88,3 +111,37 @@ def stocks_handler(event, context):
 
     else:
         return {'statusCode' : 200, 'body' : json.dumps({'post_made' : False})}
+
+def futures_handler(event, context):
+
+    # API series reference (futures closing price)
+    # WTI: RCLC1
+    # No. 2 Diesel: EER_EPD2F_PE1_Y35NY_DPG
+    # RBOB Gasoline: EER_EPMRR_PE1_Y35NY_DPG
+
+    header = {
+    "frequency": "daily",
+    "data": [
+        "value"
+    ],
+    "facets": {
+        "series": [
+            "RCLC1",
+            "EER_EPMRR_PE1_Y35NY_DPG",
+            "EER_EPD2F_PE1_Y35NY_DPG"
+        ]
+    },
+    "start": None,
+    "end": None,
+    "sort": [
+        {
+            "column": "period",
+            "direction": "desc"
+        }
+    ],
+    "offset": 0,
+    "length": 6}
+
+    url = f'https://api.eia.gov/v2/petroleum/pri/fut/data/?api_key={eiakey}'
+    r = requests.get(url=url, headers={"X-Params":json.dumps(header)})
+    return(r.json())
