@@ -27,6 +27,11 @@ eiakey = getenv("EIAKEY")
 ddb = boto3.resource('dynamodb')
 table = ddb.Table(getenv('EIABOT_TABLE'))
 
+# Helper function for adding thousands commas
+def format_num(value):
+            return "{:,}".format(value)
+
+# Lambda handler for weekly stocks data
 def stocks_handler(event, context):
 
     # Request and clean data from the EIA
@@ -66,7 +71,6 @@ def stocks_handler(event, context):
     r = requests.get(url=url, headers={'X-Params' : json.dumps(header)})
     data = json.loads(r.content)['response']['data']
     
-    print(data)
     series_end = data[0]['period']
     total_stocks = [i['value'] for i in data if i['series'] == 'WCRSTUS1']
     com_stocks = [i['value'] for i in data if i['series'] == 'WCESTUS1']
@@ -81,21 +85,20 @@ def stocks_handler(event, context):
     )
 
     if len(ddb_response['Items']) == 0:
-
-        def addcommas(value):
-            return "{:,}".format(value)
-
+        
+        # Format the message to be posted
         end_date = datetime.strptime(series_end, '%Y-%m-%d')
-        message = f'<b>Petroleum product stocks for week ending {end_date.strftime("%B %d, %Y")} (weekly change)</b>\n'
-        message += '<b>All units in thousands of BBL</b>\n\n'
+        message = f'<b>Weekly petroleum product stocks as of {end_date.strftime("%B %d, %Y")}</b>\n'
+        message += f'All numbers in thousands of barrels, weekly change in parenthesis\n\n'
         message += 'Crude oil\n'
-        message += f'Commercial:    {addcommas(com_stocks[0])}     ({addcommas(com_stocks[0]-com_stocks[1])})\n'
-        message += f'SPR:                   {addcommas(spr_stocks[0])}    ({addcommas(spr_stocks[0]-spr_stocks[1])})\n'
-        message += f'Total:                 {addcommas(total_stocks[0])}    ({addcommas(total_stocks[0]-total_stocks[1])})\n\n'
-        message += f'Gasoline:           {addcommas(gas_stocks[0])}   ({addcommas(gas_stocks[0]-gas_stocks[1])})\n'
-        message += f'Distillates:         {addcommas(dist_stocks[0])}   ({addcommas(dist_stocks[0]-dist_stocks[1])})\n\n'
+        message += 'Commercial:   ' + format_num(com_stocks[0]) + f' ({format_num(com_stocks[0]-com_stocks[1])})\n'
+        message += 'SPR:    ' + format_num(spr_stocks[0]) + f' ({format_num(spr_stocks[0]-spr_stocks[1])})\n'
+        message += 'Total:    ' + format_num(total_stocks[0]) + f' ({format_num(total_stocks[0]-total_stocks[1])})\n\n'
+        message += 'Gasoline:   ' + format_num(gas_stocks[0]) + f' ({format_num(gas_stocks[0]-gas_stocks[1])})\n'
+        message += 'Distillates:    ' + format_num(dist_stocks[0]) + f' ({format_num(dist_stocks[0]-dist_stocks[1])})\n\n'
         message += 'Source: US Energy Information Administration\n#petroleum #stocks'
         
+        # Post the message and check for a good response
         tg_response = tg.post_message(message)
         if tg_response['ok'] == True:
             table.put_item(
@@ -104,20 +107,15 @@ def stocks_handler(event, context):
                     'timestamp' : int(time()),
                     'series_end' : series_end
                 })
-            return {'statusCode': 200, 'body': json.dumps({'post_made' : True, 'tg_response' : tg_response})}
+            return {'statusCode': 200, 'body': json.dumps({'post_made' : True, 'new_data' : True, 'tg_response' : tg_response})}
 
         else:
-            return {'statusCode': 502, 'body': json.dumps({'post_made' : False, 'tg_reponse' : tg_response})}
+            return {'statusCode': 502, 'body': json.dumps({'post_made' : False, 'new_data' : True, 'tg_response' : tg_response})}
 
     else:
-        return {'statusCode' : 200, 'body' : json.dumps({'post_made' : False})}
+        return {'statusCode' : 200, 'body' : json.dumps({'post_made' : False, 'new_data' : False, 'tg_response' : None})}
 
-def futures_handler(event, context):
-
-    # API series reference (futures closing price)
-    # WTI: RCLC1
-    # No. 2 Diesel: EER_EPD2F_PE1_Y35NY_DPG
-    # RBOB Gasoline: EER_EPMRR_PE1_Y35NY_DPG
+def futures_handler(event, context): #WIP
 
     header = {
     "frequency": "daily",
@@ -126,9 +124,9 @@ def futures_handler(event, context):
     ],
     "facets": {
         "series": [
-            "RCLC1",
-            "EER_EPMRR_PE1_Y35NY_DPG",
-            "EER_EPD2F_PE1_Y35NY_DPG"
+            "RCLC1", # Cushing WTI
+            "EER_EPMRR_PE1_Y35NY_DPG", # NY Harbor RBOB gasoline
+            "EER_EPD2F_PE1_Y35NY_DPG" # NY Harbor No. 2 Diesel
         ]
     },
     "start": None,
@@ -144,4 +142,5 @@ def futures_handler(event, context):
 
     url = f'https://api.eia.gov/v2/petroleum/pri/fut/data/?api_key={eiakey}'
     r = requests.get(url=url, headers={"X-Params":json.dumps(header)})
+    data = json.loads(r.content)['response']['data']
     return(r.json())

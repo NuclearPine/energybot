@@ -26,4 +26,4 @@ def post_message(message: str):
         'parse_mode' : 'HTML'
     }
     r = requests.post(url=base_url + 'sendMessage', data=data)
-    return r.json()
+    return json.loads(r.content)
