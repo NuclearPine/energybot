@@ -27,9 +27,19 @@ eiakey = getenv("EIAKEY")
 ddb = boto3.resource('dynamodb')
 table = ddb.Table(getenv('EIABOT_TABLE'))
 
-# Helper function for adding thousands commas
-def format_num(value):
-            return "{:,}".format(value)
+# Helper functions for adding thousands commas and symbols
+def add_com(value):
+    return "{:,}".format(value)
+
+def format_num(value, symbol):
+    string = "{:,}".format(value)
+    if value > 0:
+        string = '+' + string
+    if symbol != None:
+        string = string[0] + symbol + string[1:]
+    return string
+
+            
 
 # Lambda handler for weekly stocks data
 def stocks_handler(event, context):
@@ -90,12 +100,12 @@ def stocks_handler(event, context):
         end_date = datetime.strptime(series_end, '%Y-%m-%d')
         message = f'<b>Weekly petroleum product stocks as of {end_date.strftime("%B %d, %Y")}</b>\n'
         message += f'All numbers in thousands of barrels, weekly change in parenthesis\n\n'
-        message += 'Crude oil\n'
-        message += 'Commercial:   ' + format_num(com_stocks[0]) + f' ({format_num(com_stocks[0]-com_stocks[1])})\n'
-        message += 'SPR:    ' + format_num(spr_stocks[0]) + f' ({format_num(spr_stocks[0]-spr_stocks[1])})\n'
-        message += 'Total:    ' + format_num(total_stocks[0]) + f' ({format_num(total_stocks[0]-total_stocks[1])})\n\n'
-        message += 'Gasoline:   ' + format_num(gas_stocks[0]) + f' ({format_num(gas_stocks[0]-gas_stocks[1])})\n'
-        message += 'Distillates:    ' + format_num(dist_stocks[0]) + f' ({format_num(dist_stocks[0]-dist_stocks[1])})\n\n'
+        message += 'Crude Oil\n'
+        message += 'Commercial:   ' + add_com(com_stocks[0]) + f' ({format_num(com_stocks[0]-com_stocks[1], None)})\n'
+        message += 'SPR:    ' + add_com(spr_stocks[0]) + f' ({format_num(spr_stocks[0]-spr_stocks[1], None)})\n'
+        message += 'Total:    ' + add_com(total_stocks[0]) + f' ({format_num(total_stocks[0]-total_stocks[1], None)})\n\n'
+        message += 'Gasoline:   ' + add_com(gas_stocks[0]) + f' ({format_num(gas_stocks[0]-gas_stocks[1], None)})\n'
+        message += 'Distillates:    ' + add_com(dist_stocks[0]) + f' ({format_num(dist_stocks[0]-dist_stocks[1], None)})\n\n'
         message += 'Source: US Energy Information Administration\n#petroleum #stocks'
         
         # Post the message and check for a good response
@@ -126,7 +136,7 @@ def futures_handler(event, context): #WIP
         "series": [
             "RCLC1", # Cushing WTI
             "EER_EPMRR_PE1_Y35NY_DPG", # NY Harbor RBOB gasoline
-            "EER_EPD2F_PE1_Y35NY_DPG" # NY Harbor No. 2 Diesel
+            "EER_EPD2F_PE1_Y35NY_DPG" # NY Harbor No. 2 diesel
         ]
     },
     "start": None,
@@ -143,4 +153,78 @@ def futures_handler(event, context): #WIP
     url = f'https://api.eia.gov/v2/petroleum/pri/fut/data/?api_key={eiakey}'
     r = requests.get(url=url, headers={"X-Params":json.dumps(header)})
     data = json.loads(r.content)['response']['data']
-    return(r.json())
+
+    ngheader = {
+    "frequency": "daily",
+    "data": [
+        "value"
+    ],
+    "facets": {
+        "series": [
+            "RNGC1" # Henry Hub nat gas
+        ]
+    },
+    "start": None,
+    "end": None,
+    "sort": [
+        {
+            "column": "period",
+            "direction": "desc"
+        }
+    ],
+    "offset": 0,
+    "length": 2}
+    
+    url = f'https://api.eia.gov/v2/natural-gas/pri/fut/data/?api_key={eiakey}'
+    r = requests.get(url=url, headers={"X-Params":json.dumps(ngheader)})
+    ngdata = json.loads(r.content)['response']['data']
+    
+    series_end = data[0]['period']
+    wti = [i['value'] for i in data if i['series'] == 'RCLC1']
+    gasoline = [i['value'] for i in data if i['series'] == 'EER_EPMRR_PE1_Y35NY_DPG']
+    no2 = [i['value'] for i in data if i['series'] == 'EER_EPD2F_PE1_Y35NY_DPG']
+    ng = [i['value'] for i in ngdata if i['series'] == 'RNGC1']
+
+    ddb_response = table.query(
+        KeyConditionExpression=Key('dataset').eq('futures'),
+        FilterExpression=Attr('series_end').eq(series_end)
+    )
+    
+    if len(ddb_response['Items']) == 0:
+        
+        wti_chg = format_num(round(wti[0]-wti[1], 2), '$')
+        wti_pct = format_num(round((wti[0]-wti[1]) / wti[1] * 100, 2), '%')
+        gasoline_chg = format_num(round(gasoline[0]-gasoline[1], 3), '$')
+        gasoline_pct = format_num(round((gasoline[0]-gasoline[1]) / gasoline[1] * 100, 2), '%')
+        no2_chg = format_num(round(no2[0]-no2[1], 3), '$')
+        no2_pct = format_num(round((no2[0]-no2[1]) / no2[1] * 100, 2), '%')
+        ng_chg = format_num(round(ng[0]-ng[1], 3), '$')
+        ng_pct = format_num(round((ng[0]-ng[1]) / ng[1] * 100, 2), '%')
+
+        end_date = datetime.strptime(series_end, '%Y-%m-%d')
+        message = f'<b>NYMEX closing prompt-month futures prices for {end_date.strftime("%B %d, %Y")}</b>\n'
+        message += 'Change since last recorded close in parenthesis\n\n'
+        message += f'<b>Crude Oil:</b> ${wti[0]}/bbl ({wti_chg}, {wti_pct})\n'
+        message += f'<b>RBOB Gasoline:</b> ${gasoline[0]}/gal ({gasoline_chg}, {gasoline_pct})\n'
+        message += f'<b>Heating Oil:</b> ${no2[0]}/gal ({no2_chg}, {no2_pct})\n'
+        message += f'<b>Natural Gas:</b> ${ng[0]}/MMBTU ({ng_chg}, {ng_pct})\n\n'
+        message += 'Source: US Energy Information Administration\n#petroleum #prices'
+
+        tg_response = tg.post_message(message)
+        if tg_response['ok'] == True:
+
+            table.put_item(
+                Item={
+                    'dataset' : 'futures',
+                    'timestamp' : int(time()),
+                    'series_end' : series_end
+                })
+
+            return {'statusCode': 200, 'body': json.dumps({'post_made' : True, 'new_data' : True, 'tg_response' : tg_response})}
+
+        else:
+            return {'statusCode': 502, 'body': json.dumps({'post_made' : False, 'new_data' : True, 'tg_response' : tg_response})}
+
+    else:
+        return {'statusCode' : 200, 'body' : json.dumps({'post_made' : False, 'new_data' : False, 'tg_response' : None})}
+
