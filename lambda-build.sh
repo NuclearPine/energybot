@@ -1,6 +1,6 @@
 #!/usr/bin/sh
 
-PIPDIR=venv/lib/python3.10/site-packages
+PIPDIR=.venv/lib/python3.10/site-packages
 cd $PIPDIR
 zip -r ../../../../lambda-pkg.zip .
 cd ../../../../src

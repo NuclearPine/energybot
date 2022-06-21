@@ -13,12 +13,13 @@
 # limitations under the License.
 
 import json
+import pandas as pd
+import matplotlib.pyplot as plt
 import requests
-import boto3
 import telegram as tg
 from datetime import datetime
-from time import time
 from os import getenv
+import boto3
 from boto3.dynamodb.conditions import Key
 from boto3.dynamodb.conditions import Attr
 
@@ -27,95 +28,94 @@ eiakey = getenv("EIAKEY")
 ddb = boto3.resource('dynamodb')
 table = ddb.Table(getenv('EIABOT_TABLE'))
 
-# Helper functions for adding thousands commas and symbols
-def add_com(value):
-    return "{:,}".format(value)
-
-def format_num(value, symbol):
-    string = "{:,}".format(value)
-    if value > 0:
-        string = '+' + string
-    if symbol != None:
-        string = string[0] + symbol + string[1:]
-    return string
-
-            
-
 # Lambda handler for weekly stocks data
 def stocks_handler(event, context):
 
-    # Request and clean data from the EIA
-    # Series ID reference
-    # Weekly crude oil stocks incl SPR: PET.WCRSTUS1.W
-    # Weekly crude oil stocks excl SPR: PET.WCESTUS1.W
-    # Weekly SPR stocks: PET.WCSSTUS1.W
-    # Weekly total gasoline stocks: PET.WGTSTUS1.W
-    # Weekly total distillate stocks PET.WDISTUS1.W
-    
-    header = {
-    "frequency": "weekly",
-    "data": [
-        "value"
-    ],
-    "facets": {
-        "series": [
-            "WCESTUS1",
-            "WCRSTUS1",
-            "WCSSTUS1",
-            "WGTSTUS1",
-            "WDISTUS1"
-        ]
-    },
-    "start": None,
-    "end": None,
-    "sort": [
-        {
-            "column": "period",
-            "direction": "desc"
-        }
-    ],
-    "offset": 0,
-    "length": 10}
-
-    url = f'https://api.eia.gov/v2/petroleum/stoc/wstk/data/?api_key={eiakey}'
-    r = requests.get(url=url, headers={'X-Params' : json.dumps(header)})
-    data = json.loads(r.content)['response']['data']
-    
-    series_end = data[0]['period']
-    total_stocks = [i['value'] for i in data if i['series'] == 'WCRSTUS1']
-    com_stocks = [i['value'] for i in data if i['series'] == 'WCESTUS1']
-    spr_stocks = [i['value'] for i in data if i['series'] == 'WCSSTUS1']
-    gas_stocks = [i['value'] for i in data if i['series'] == 'WGTSTUS1']
-    dist_stocks = [i['value'] for i in data if i['series'] == 'WDISTUS1']
+    # Load/transform the WPSR stocks table into a pandas dataframe
+    df = pd.read_csv('https://ir.eia.gov/wpsr/table4.csv') 
+    last_date = datetime.strptime(df.columns[1], '%m/%d/%y').date()
+    wk_date = datetime.strptime(df.columns[2], '%m/%d/%y').date()
+    yr_date = datetime.strptime(df.columns[4], '%m/%d/%y').date()
     
     # Check DDB table if a post was already made for this data
     ddb_response = table.query(
         KeyConditionExpression=Key('dataset').eq('crude_stocks'),
-        FilterExpression=Attr('series_end').eq(series_end)
+        FilterExpression=Attr('series_end').eq(last_date.isoformat())
     )
 
     if len(ddb_response['Items']) == 0:
         
-        # Format the message to be posted
-        end_date = datetime.strptime(series_end, '%Y-%m-%d')
-        message = f'<b>Weekly petroleum product stocks as of {end_date.strftime("%B %d, %Y")}</b>\n'
-        message += f'All numbers in thousands of barrels, weekly change in parenthesis\n\n'
-        message += 'Crude Oil\n'
-        message += 'Commercial:   ' + add_com(com_stocks[0]) + f' ({format_num(com_stocks[0]-com_stocks[1], None)})\n'
-        message += 'SPR:    ' + add_com(spr_stocks[0]) + f' ({format_num(spr_stocks[0]-spr_stocks[1], None)})\n'
-        message += 'Total:    ' + add_com(total_stocks[0]) + f' ({format_num(total_stocks[0]-total_stocks[1], None)})\n\n'
-        message += 'Gasoline:   ' + add_com(gas_stocks[0]) + f' ({format_num(gas_stocks[0]-gas_stocks[1], None)})\n'
-        message += 'Distillates:    ' + add_com(dist_stocks[0]) + f' ({format_num(dist_stocks[0]-dist_stocks[1], None)})\n\n'
-        message += 'Source: US Energy Information Administration\n#petroleum #stocks'
+        # additional dataframe formatting
+        products = df.iloc[[0,1,9,10,16],[1,2,3,4,5]]
+        products.index = ['total','com','spr','gas','dist']
+        products.columns = pd.Index(['last', '1wk', 'diff', '1y', 'pct'])
+        def f1(x):
+            if x > 0:
+                return f'+{str(x)}'
+            else:
+                return str(x)
+        def f2(x):
+            if x > 0:
+                return f'+{str(x)}%'
+            else:
+                return f'{str(x)}%'
+
+        products['diff'] = products['diff'].apply(f1)
+        products['pct'] = products['pct'].apply(f2)
+
+        # Create table image
+        def create_img(img_path: str):
+            fig_background_color = '#ffffff'
+            plt.figure(linewidth=2, tight_layout={'pad':1}, figsize=(6,3), facecolor=fig_background_color)
+            plt.suptitle(f'U.S. Petroleum Product Stocks, Week Ending {wk_date.isoformat()}\n Million Barrels')
+
+            col_labels = [last_date.isoformat(), wk_date.isoformat(), 'Difference', 
+                        yr_date.isoformat(), '1Y Change']
+            row_labels = ['Crude oil', '    Commercial', '    SPR', 'Gasoline', 'Distillates']
+            row_colors = ['#ffffff', '#ccfccc', '#ffffff', '#ccfccc', '#ffffff',]
+            col_colors = ['#cce4fc', '#cce4fc', '#cce4fc', '#cce4fc', '#cce4fc',]
+            cell_colors = []
+            for i in range(5):
+                if i % 2 == 0:
+                    cell_colors.append(['#ffffff', '#ffffff', '#ffffff', '#ffffff', '#ffffff'])
+                else:
+                    cell_colors.append(['#ccfccc', '#ccfccc', '#ccfccc', '#ccfccc', '#ccfccc'])
+
+            cell_text = []
+            for i in products.index:
+                cell_text.append(list(products.loc[i]))
+                    
+            ax = plt.gca()
+            ax.get_xaxis().set_visible(False)
+            ax.get_yaxis().set_visible(False)
+            plt.box(on=None)
+
+            table = plt.table(cellText=cell_text, colLabels=col_labels, rowLabels=row_labels, 
+                            rowColours=row_colors, cellColours=cell_colors, colColours=col_colors,
+                            loc='center')
+
+            footer_text = 'Source: EIA Weekly Petroleum Status Report'
+            footer_text += '\ngithub.com/NuclearPine/energybot'
+            plt.figtext(.05, .05, footer_text, horizontalalignment='left')
+
+            table.scale(1,1.5)
+
+            fig = plt.gcf()
+            plt.savefig(img_path, 
+                        dpi=150, 
+                        edgecolor=fig.get_edgecolor(), 
+                        facecolor=fig.get_facecolor())
+        
+        create_img('/tmp/eiabot-table.png')
+        message = f'Weekly petroleum product stocks for week ending {last_date.isoformat()}'
         
         # Post the message and check for a good response
-        tg_response = tg.post_message(message)
+        tg_response = tg.post_image(message=message, image='/tmp/eiabot-table.png')
         if tg_response['ok'] == True:
             table.put_item(
                 Item={
                     'dataset' : 'crude_stocks',
-                    'timestamp' : int(time()),
-                    'series_end' : series_end
+                    'last_date' : last_date.isoformat()
                 })
             return {'statusCode': 200, 'body': json.dumps({'post_made' : True, 'new_data' : True, 'tg_response' : tg_response})}
 

@@ -27,3 +27,17 @@ def post_message(message: str):
     }
     r = requests.post(url=base_url + 'sendMessage', data=data)
     return json.loads(r.content)
+
+def post_image(message: str, image: str):
+    data = {
+        'chat_id' : channel_id,
+        'caption' : message,
+        'parse_mode' : 'HTML',
+    }
+
+    files = {
+        'photo' : open(image, 'rb')
+    }
+
+    r = requests.post(url=base_url + 'sendPhoto', files=files, data=data)
+    return json.loads(r.content)
