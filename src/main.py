@@ -25,7 +25,7 @@ from boto3.dynamodb.conditions import Attr
 
 eiakey = getenv("EIAKEY")
 # Connect to DynamoDB for logging successful posts
-ddb = boto3.resource('dynamodb')
+ddb = boto3.resource('dynamodb', region_name='us-east-1', aws_access_key_id=getenv('AWS_KEY_ID'), aws_secret_access_key=getenv('AWS_SECRET'))
 table = ddb.Table(getenv('EIABOT_TABLE'))
 
 # Lambda handler for weekly stocks data
@@ -39,8 +39,7 @@ def stocks_handler(event, context):
     
     # Check DDB table if a post was already made for this data
     ddb_response = table.query(
-        KeyConditionExpression=Key('dataset').eq('crude_stocks'),
-        FilterExpression=Attr('series_end').eq(last_date.isoformat())
+        KeyConditionExpression=Key('dataset').eq('crude_stocks') & Key('last_date').eq(last_date.isoformat())
     )
 
     if len(ddb_response['Items']) == 0:
