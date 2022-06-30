@@ -66,7 +66,7 @@ def stocks_handler(event, context):
         def create_img(img_path: str):
             fig_background_color = '#ffffff'
             plt.figure(linewidth=2, tight_layout={'pad':1}, figsize=(6,3), facecolor=fig_background_color)
-            plt.suptitle(f'U.S. Petroleum Product Stocks, Week Ending {wk_date.isoformat()}\n Million Barrels')
+            plt.suptitle(f'U.S. Petroleum Product Stocks, Week Ending {last_date.isoformat()}\n Million Barrels')
 
             col_labels = [last_date.isoformat(), wk_date.isoformat(), 'Difference', 
                         yr_date.isoformat(), '1Y Change']
@@ -124,7 +124,7 @@ def stocks_handler(event, context):
     else:
         return {'statusCode' : 200, 'body' : json.dumps({'post_made' : False, 'new_data' : False, 'tg_response' : None})}
 
-def futures_handler(event, context): #WIP
+def futures_handler(event, context):
 
     header = {
     "frequency": "daily",
@@ -185,8 +185,7 @@ def futures_handler(event, context): #WIP
     ng = [i['value'] for i in ngdata if i['series'] == 'RNGC1']
 
     ddb_response = table.query(
-        KeyConditionExpression=Key('dataset').eq('futures'),
-        FilterExpression=Attr('series_end').eq(series_end)
+        KeyConditionExpression=Key('dataset').eq('futures') & Key('last_date').eq(last_date.isoformat())
     )
     
     if len(ddb_response['Items']) == 0:
@@ -215,8 +214,7 @@ def futures_handler(event, context): #WIP
             table.put_item(
                 Item={
                     'dataset' : 'futures',
-                    'timestamp' : int(time()),
-                    'series_end' : series_end
+                    'last_date' : series_end
                 })
 
             return {'statusCode': 200, 'body': json.dumps({'post_made' : True, 'new_data' : True, 'tg_response' : tg_response})}
